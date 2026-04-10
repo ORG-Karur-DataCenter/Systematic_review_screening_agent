@@ -1,0 +1,50 @@
+{
+  "description": "Screening criteria for systematic review on Giant Cell Tumor (GCT) in the Cervical Spine. This configuration identifies original research articles about bone GCT/Osteoclastoma specifically in the cervical spine region, while excluding reviews and non-bone GCT types.",
+  "inclusion": {
+    "primary_topic": [
+      "Giant Cell Tumor",
+      "Giant-Cell Tumor",
+      "Giant Cell Tumour",
+      "Giant-Cell Tumour",
+      "Osteoclastoma"
+    ],
+    "anatomical_location": [
+      "Cervical",
+      "C1",
+      "C2",
+      "C3",
+      "C4",
+      "C5",
+      "C6",
+      "C7",
+      "Atlantoaxial"
+    ]
+  },
+  "exclusion": {
+    "study_types": [
+      "Systematic Review",
+      "Meta-Analysis",
+      "Narrative Review",
+      "Literature Review"
+    ],
+    "competing_diagnoses": [
+      "Osteoblastoma",
+      "Aneurysmal Bone Cyst",
+      "Metastasis",
+      "Metastases",
+      "Lymphoma",
+      "Chordoma",
+      "Plasmacytoma"
+    ],
+    "non_bone_types": [
+      "Synovial",
+      "Tenosynovial"
+    ]
+  },
+  "rules": {
+    "case_sensitive": false,
+    "primary_in_title_required": true,
+    "allow_partial_matches": true,
+    "title_weight_higher": true
+  }
+}
