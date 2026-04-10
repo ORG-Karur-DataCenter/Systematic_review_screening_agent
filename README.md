@@ -1,243 +1,145 @@
 # Systematic Review Screening Agent
 
-An intelligent, AI-powered tool for automating the title and abstract screening process in systematic reviews. This tool uses **browser automation with Gemini AI** to generate custom screening logic tailored to your specific research criteria.
+An AI-powered dual-pass title-and-abstract screening tool for systematic reviews. Generates custom screening logic from your research criteria using Google Gemini — runs free via browser automation (no API key required) or fast via API key.
 
-## 🌟 Features
+Part of the **Agentic AI-Powered Systematic Review Pipeline** described in:
+> *"Agentic AI for Systematic Reviews: A Four-Agent Pipeline for Deduplication, Screening, Extraction, and Validation"*
 
-- **🤖 AI-Powered Customization**: Uses Google's Gemini (via browser automation) to generate sophisticated screening logic from your criteria
-- **📄 Multiple Input Formats**: Define criteria in `.txt`, `.docx`, or `.json` formats
-- **🧠 Intelligent Logic**: Generates nuanced decision trees with contextual exception handling, not just simple keyword matching
-- **📊 BibTeX Support**: Parses `.bib` files exported from PubMed, Scopus, Web of Science, and other databases
-- **📝 Detailed Reasoning**: Provides clear explanations for every inclusion/exclusion decision
-- **🔄 PRISMA-Ready**: Outputs CSV files compatible with PRISMA workflow documentation
-- **🌐 No API Key Required**: Uses browser automation - just log in to Gemini once
+**Related Repositories:**
+- [Deduplication Agent](https://github.com/ORG-Karur-DataCenter/Systematic_review_DeDuplication_agent)
+- [Extraction Agent](https://github.com/ORG-Karur-DataCenter/Systematic_review_extraction_agent)
+- [Validation & Healing Agent](https://github.com/ORG-Karur-DataCenter/Sys_review_extraction_validation_agent)
 
-## 🚀 Quick Start
+---
 
-### Prerequisites
+## Features
 
-- Python 3.7 or higher
-- Google account (for Gemini access)
-- Chrome or Edge browser
+- **AI-powered criteria parsing** — converts free-text or structured criteria into screening logic via Gemini
+- **Dual-pass screening** — two independent passes per article; disagreements are flagged for human review
+- **Multiple input formats** — `.txt`, `.docx`, `.json` criteria files; `.bib`, `.ris` article files
+- **Detailed reasoning** — every include/exclude decision includes an explanation
+- **PRISMA-ready output** — CSV files compatible with PRISMA flow documentation
+- **Free by default** — uses Playwright browser automation (log in to Gemini once, no API costs)
+- **API mode** — use `--api-key` for faster batch processing
 
-### Installation
+---
 
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/yourusername/Systematic_review_screening_agent.git
-   cd Systematic_review_screening_agent
-   ```
+## Installation
 
-2. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+git clone https://github.com/ORG-Karur-DataCenter/Systematic_review_screening_agent.git
+cd Systematic_review_screening_agent
+pip install -r requirements.txt
+playwright install chromium
+```
 
-3. **Install Playwright browsers**:
-   ```bash
-   playwright install chromium
-   ```
+---
 
-### Basic Usage
+## Usage
 
-#### Step 1: Prepare Your Criteria File
+### Step 1: Define Your Criteria
 
-Create a criteria file defining your inclusion/exclusion rules. See [Criteria File Formats](#criteria-file-formats) below.
+Create a criteria file (`my_criteria.txt`):
 
-Example (`my_criteria.txt`):
 ```
 [DESCRIPTION]
-Screening for studies on diabetes treatment in elderly patients
+Screening for RCTs comparing cervical disc arthroplasty vs ACDF
 
 [INCLUSION_KEYWORDS]
-Primary Topic: Diabetes, Type 2 Diabetes, T2DM
-Population: Elderly, Geriatric, Aged, Senior
-Intervention: Treatment, Therapy, Management
+Intervention: Cervical disc arthroplasty, CDA, Total disc replacement
+Comparator: ACDF, Anterior cervical discectomy and fusion
+Study Type: Randomized controlled trial, RCT
 
 [EXCLUSION_KEYWORDS]
-Study Types: Systematic Review, Meta-Analysis
-Other Conditions: Type 1 Diabetes, Pediatric
+Study Types: Systematic Review, Meta-Analysis, Case Report
+Conditions: Lumbar, Thoracic, Infection, Tumor
 ```
 
-#### Step 2: Generate Custom Screening Code
-
-The script will open a browser, log in to Gemini (first time only), and automatically generate the code:
+### Step 2: Generate Custom Screening Logic
 
 ```bash
 python generate_screening_code.py my_criteria.txt
 ```
 
-**First-time setup:**
-- Browser will open to gemini.google.com
-- Log in with your Google account (one-time)
-- The script will automatically send the prompt and extract the generated code
-- Generated code is saved as `screen_articles_custom.py`
+- Browser opens to gemini.google.com (log in once)
+- Gemini generates a custom `screen_articles_custom.py`
+- Screening logic is tailored to your exact criteria
 
-#### Step 3: Prepare Your Articles
+### Step 3: Prepare Articles
 
-Place your BibTeX file (exported from your database) in the project folder as `articles.bib`.
+Place your BibTeX or RIS export in the project folder as `articles.bib` (or `articles.ris`).
 
-#### Step 4: Parse and Screen
+### Step 4: Parse and Screen
 
 ```bash
-# Parse BibTeX to JSON
-python parse_bib.py
-
-# Run screening with your custom logic
-python screen_articles_custom.py
+python parse_bib.py                    # Parse BibTeX to JSON
+python screen_articles_custom.py       # Run dual-pass screening
 ```
 
-#### Step 5: Review Results
+### Step 5: Review Results
 
-Open `screening_results.csv` to see your screening results with decisions and reasoning.
-
-## 📋 Criteria File Formats
-
-### Text Format (.txt)
-
-Simple, human-readable format:
-
-```
-[DESCRIPTION]
-Brief description of your screening criteria
-
-[INCLUSION_KEYWORDS]
-Category Name: keyword1, keyword2, keyword3
-Another Category: keyword4, keyword5
-
-[EXCLUSION_KEYWORDS]
-Study Types: Systematic Review, Meta-Analysis
-Unwanted Topics: keyword6, keyword7
-
-[MATCHING_RULES]
-Case Sensitive: No
-Primary Topic in Title Required: Yes
-```
-
-### JSON Format (.json)
-
-Structured format for programmatic use:
-
-```json
-{
-  "description": "Your screening criteria description",
-  "inclusion": {
-    "primary_topic": ["keyword1", "keyword2"],
-    "population": ["keyword3", "keyword4"]
-  },
-  "exclusion": {
-    "study_types": ["Systematic Review", "Meta-Analysis"],
-    "unwanted_topics": ["keyword5", "keyword6"]
-  },
-  "rules": {
-    "case_sensitive": false,
-    "primary_in_title_required": true
-  }
-}
-```
-
-### Word Format (.docx)
-
-Structured document with:
-- **Heading 1**: Section names (Inclusion Criteria, Exclusion Criteria, Description)
-- **Heading 2**: Category names (Primary Topic, Population, etc.)
-- **Bullet points**: Individual keywords
-
-See `examples/` folder for complete examples.
-
-## 🔧 Advanced Usage
-
-### Using the Original Hardcoded Version
-
-If you want to use the original hardcoded screening logic (for Giant Cell Tumor in Cervical Spine):
-
-```bash
-python parse_bib.py
-python screen_articles.py
-```
-
-### Customizing Generated Code
-
-After generating `screen_articles_custom.py`, you can manually edit it to fine-tune the logic if needed.
-
-### Testing Your Criteria
-
-Use the example files to test your setup:
-
-```bash
-python generate_screening_code.py examples/example_criteria.txt screen_test.py
-```
-
-## 📁 Project Structure
-
-```
-Systematic_review_screening_agent/
-├── parse_bib.py                 # BibTeX parser
-├── screen_articles.py           # Original hardcoded screening logic (reference)
-├── criteria_parser.py           # Criteria file parser
-├── generate_screening_code.py  # LLM-based code generator
-├── requirements.txt             # Python dependencies
-├── LICENSE                      # MIT License
-├── README.md                    # This file
-└── examples/                    # Example criteria files
-    ├── example_criteria.txt
-    ├── example_criteria.json
-    └── example_criteria.docx
-```
-
-## 🎯 How It Works
-
-1. **Criteria Parsing**: Your criteria file is parsed into a structured format
-2. **AI Code Generation**: Gemini API analyzes your criteria and the reference code to generate sophisticated screening logic
-3. **Smart Screening**: The generated code applies nuanced decision-making:
-   - Hierarchical exclusion rules
-   - Contextual exception handling
-   - Title vs. abstract weighting
-   - Complex boolean logic for competing topics
-4. **Detailed Output**: Each article gets a decision (Include/Exclude) with clear reasoning
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- Built with [Google Gemini API](https://ai.google.dev/)
-- Inspired by the need for efficient systematic review screening
-- Original use case: Giant Cell Tumor research in cervical spine
-
-## 📧 Support
-
-If you encounter any issues or have questions:
-- Open an issue on GitHub
-- Check the `examples/` folder for reference implementations
-
-## ⚠️ Important Notes
-
-- **Browser Automation**: Uses Playwright to interact with gemini.google.com - no API costs!
-- **First-Time Login**: You'll need to log in to Gemini once; the browser profile is saved for future use
-- **Review Generated Code**: Always review the AI-generated screening logic before using it for important research
-- **Manual Verification**: This tool assists with screening but doesn't replace expert judgment. Always verify critical decisions
-- **Browser Compatibility**: Works with Chrome or Edge browsers
-
-## 🔮 Future Enhancements
-
-- [ ] Support for RIS and other citation formats
-- [ ] Web interface for easier use
-- [ ] Batch processing for multiple criteria sets
-- [ ] Integration with reference management tools
-- [ ] Export to Rayyan, Covidence, and other screening platforms
+Open `screening_results.csv`:
+| Field | Description |
+|---|---|
+| `title` | Article title |
+| `decision` | Include / Exclude |
+| `pass1_decision` | First screener decision |
+| `pass2_decision` | Second screener decision |
+| `agreement` | True/False |
+| `reason` | Explanation |
 
 ---
 
-**Made with ❤️ for systematic reviewers worldwide**
+## Project Structure
+
+```
+screening_agent/
+├── screen_articles.py           # Core screening engine (with hardcoded reference criteria)
+├── generate_screening_code.py   # AI-powered custom logic generator
+├── criteria_parser.py           # Criteria file parser (.txt/.json/.docx)
+├── parse_bib.py                 # BibTeX/RIS parser
+├── config.py                    # Configuration (model, thresholds)
+├── QUICKSTART.md                # 5-minute quickstart guide
+├── requirements.txt             # Python dependencies
+├── LICENSE                      # MIT License
+└── examples/
+    ├── example_criteria.txt
+    └── example_criteria.json
+```
+
+---
+
+## Dual-Pass Screening Logic
+
+```
+Article → Pass 1 (Gemini) → Include/Exclude + Reason
+        → Pass 2 (Gemini) → Include/Exclude + Reason
+        → Agreement Check:
+              Both Include → INCLUDE
+              Both Exclude → EXCLUDE
+              Disagree     → FLAG FOR HUMAN REVIEW
+```
+
+---
+
+## Configuration
+
+Edit `config.py` to set:
+- `MODEL_NAME` — Gemini model (`gemini-2.0-flash`, `gemini-2.5-flash`, etc.)
+- `TEMPERATURE` — Reproducibility setting (default: `0.2`)
+- `AGREEMENT_THRESHOLD` — Fuzzy match threshold for decisions
+
+---
+
+## Important Notes
+
+- **First-time browser login**: Browser profile is saved; subsequent runs are fully automatic
+- **Always review**: AI screening assists but does not replace expert judgment
+- **Rate limits**: Free tier allows ~5 requests/min; use `--api-key` with multiple keys for bulk runs
+- **Reproducibility**: `temperature=0.2` ensures deterministic outputs at `max_output_tokens=2048`
+
+---
+
+## License
+
+MIT License — see [LICENSE](LICENSE) for details.
