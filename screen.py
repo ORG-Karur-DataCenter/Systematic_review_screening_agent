@@ -660,6 +660,103 @@ Examples:
     rprint(f"  [green]✔[/green] Files exported")
 
     # ══════════════════════════════════════════════
+    # PHASE 5: Human Adjudication of Disagreements
+    # ══════════════════════════════════════════════
+    if disagreements:
+        rprint("")
+        rprint(f"[bold cyan]PHASE 5[/bold cyan] [white]Human adjudication of {len(disagreements)} disagreements[/white]")
+        rprint(f"  [dim]For each article, type: [bold]i[/bold]=Include  [bold]e[/bold]=Exclude  [bold]s[/bold]=Skip[/dim]")
+        rprint("")
+        logger.info(f"PHASE 5: Human adjudication of {len(disagreements)} disagreements...")
+
+        resolved = []
+        still_unresolved = []
+
+        for idx, d in enumerate(disagreements, 1):
+            if RICH_AVAILABLE:
+                detail = Text()
+                detail.append("Reviewer 1: ", style="bold")
+                r1_style = "green" if d['Pass_1_Decision'] == 'Include' else "red"
+                detail.append(d['Pass_1_Decision'], style=r1_style)
+                detail.append(f" -- {d['Pass_1_Reason']}\n", style="dim")
+                detail.append("Reviewer 2: ", style="bold")
+                r2_style = "green" if d['Pass_2_Decision'] == 'Include' else "red"
+                detail.append(d['Pass_2_Decision'], style=r2_style)
+                detail.append(f" -- {d['Pass_2_Reason']}", style="dim")
+
+                title_short = d['Title'][:80]
+                console.print(Panel(
+                    detail,
+                    title=f"[bold yellow][{idx}/{len(disagreements)}] {title_short}",
+                    border_style="yellow",
+                    padding=(1, 2),
+                ))
+            else:
+                print(f"\n--- [{idx}/{len(disagreements)}] {d['Title'][:80]} ---")
+                print(f"  Reviewer 1: {d['Pass_1_Decision']} -- {d['Pass_1_Reason']}")
+                print(f"  Reviewer 2: {d['Pass_2_Decision']} -- {d['Pass_2_Reason']}")
+
+            while True:
+                try:
+                    choice = input("  Decision (i/e/s): ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    choice = 's'
+                if choice in ('i', 'e', 's'):
+                    break
+                print("  Invalid input. Enter i (Include), e (Exclude), or s (Skip).")
+
+            if choice == 'i':
+                resolved.append({
+                    "Key": d['Key'], "Title": d['Title'],
+                    "Decision": "Include",
+                    "Reason": f"Human adjudication (R1: {d['Pass_1_Decision']}, R2: {d['Pass_2_Decision']})"
+                })
+                rprint("  [green]-> Included[/green]")
+            elif choice == 'e':
+                resolved.append({
+                    "Key": d['Key'], "Title": d['Title'],
+                    "Decision": "Exclude",
+                    "Reason": f"Human adjudication (R1: {d['Pass_1_Decision']}, R2: {d['Pass_2_Decision']})"
+                })
+                rprint("  [red]-> Excluded[/red]")
+            else:
+                still_unresolved.append(d)
+                rprint("  [yellow]-> Skipped[/yellow]")
+
+        # Merge resolved into agreed
+        agreed.extend(resolved)
+        disagreements = still_unresolved
+
+        human_inc = sum(1 for r in resolved if r['Decision'] == 'Include')
+        human_exc = sum(1 for r in resolved if r['Decision'] == 'Exclude')
+        logger.info(f"  Adjudication: {len(resolved)} resolved ({human_inc} inc, {human_exc} exc), {len(still_unresolved)} skipped")
+        rprint(f"\n  [green]✔[/green] Adjudication: [bold]{human_inc}[/bold] included, [bold]{human_exc}[/bold] excluded, [bold]{len(still_unresolved)}[/bold] deferred")
+
+        # Re-export final results
+        rprint("")
+        rprint("[bold cyan]PHASE 5b[/bold cyan] [white]Re-exporting with adjudicated results...[/white]")
+
+        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=["Key", "Title", "Decision", "Reason"])
+            writer.writeheader()
+            writer.writerows(agreed)
+
+        if still_unresolved:
+            with open(disagree_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=[
+                    "Key", "Title", "Pass_1_Decision", "Pass_1_Reason",
+                    "Pass_2_Decision", "Pass_2_Reason", "Final_Decision"
+                ])
+                writer.writeheader()
+                writer.writerows(still_unresolved)
+        else:
+            disagree_file = output_dir / "screening_disagreements.csv"
+            if disagree_file.exists():
+                disagree_file.unlink()
+
+        included_count = export_included_ris(agreed, all_articles, ris_path)
+        rprint(f"  [green]✔[/green] Final results re-exported")
+
     # SUMMARY
     # ══════════════════════════════════════════════
     elapsed = (datetime.now() - start_time).total_seconds()
