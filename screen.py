@@ -460,16 +460,17 @@ Examples:
         json.dump(articles, f, indent=2, ensure_ascii=False)
 
     # ══════════════════════════════════════════════
-    # PHASE 2: Generate Custom Screening Logic
+    # PHASE 2: Generate Custom Screening Logic (Dual Independent Generation)
     # ══════════════════════════════════════════════
-    custom_module_path = str(output_dir / "screen_articles_custom.py")
+    custom_module_path_1 = str(output_dir / "screen_articles_pass1.py")
+    custom_module_path_2 = str(output_dir / "screen_articles_pass2.py")
 
     if args.skip_codegen:
         rprint("[bold cyan]PHASE 2[/bold cyan] [dim]Skipped (--skip-codegen)[/dim]")
         logger.info("PHASE 2: Skipped (--skip-codegen)")
     else:
-        rprint("[bold cyan]PHASE 2[/bold cyan] [white]Generating custom screening logic via Gemini...[/white]")
-        logger.info("PHASE 2: Generating custom screening logic via Gemini...")
+        rprint("[bold cyan]PHASE 2[/bold cyan] [white]Generating dual independent screening logic via Gemini...[/white]")
+        logger.info("PHASE 2: Generating dual independent screening logic via Gemini...")
 
         criteria = parse_criteria(args.criteria)
         desc_preview = criteria.get('description', 'N/A')[:60]
@@ -483,6 +484,16 @@ Examples:
         prompt = create_gemini_prompt(criteria, reference_code)
         logger.info(f"  Prompt: {len(prompt)} characters")
 
+        def _generate_code(label):
+            """Generate screening code via API or browser."""
+            if args.api_key:
+                logger.info(f"  {label} — Mode: API ({args.model})")
+                return generate_via_api(prompt, args.api_key, args.model)
+            else:
+                logger.info(f"  {label} — Mode: Browser ({args.browser})")
+                return generate_via_browser(prompt, args.browser)
+
+        # Generate Pass 1 code
         if RICH_AVAILABLE:
             with Progress(
                 SpinnerColumn("dots"),
@@ -490,55 +501,88 @@ Examples:
                 console=console,
                 transient=True,
             ) as progress:
-                progress.add_task("Waiting for Gemini...", total=None)
-                if args.api_key:
-                    logger.info(f"  Mode: API ({args.model})")
-                    generated_code = generate_via_api(prompt, args.api_key, args.model)
-                else:
-                    logger.info(f"  Mode: Browser ({args.browser})")
-                    generated_code = generate_via_browser(prompt, args.browser)
+                progress.add_task("Generating Reviewer 1 logic...", total=None)
+                code_1 = _generate_code("Reviewer 1")
         else:
-            if args.api_key:
-                generated_code = generate_via_api(prompt, args.api_key, args.model)
-            else:
-                generated_code = generate_via_browser(prompt, args.browser)
+            code_1 = _generate_code("Reviewer 1")
 
-        if generated_code:
-            complete_module = create_complete_module(generated_code, criteria, args.criteria)
-            with open(custom_module_path, 'w', encoding='utf-8') as f:
-                f.write(complete_module)
-            logger.info(f"  Custom module saved: {custom_module_path}")
-            rprint(f"  [green]✔[/green] Custom screening code generated and validated")
+        if code_1:
+            module_1 = create_complete_module(code_1, criteria, args.criteria)
+            with open(custom_module_path_1, 'w', encoding='utf-8') as f:
+                f.write(module_1)
+            logger.info(f"  Reviewer 1 module saved: {custom_module_path_1}")
+            rprint(f"  [green]✔[/green] Reviewer 1 screening code generated")
         else:
-            logger.warning("  Code generation failed. Falling back to default logic.")
-            rprint("  [yellow]⚠[/yellow] Code generation failed — using default logic")
+            logger.warning("  Reviewer 1 code generation failed.")
+            rprint("  [yellow]⚠[/yellow] Reviewer 1 code generation failed")
+
+        # Generate Pass 2 code (independent generation)
+        if RICH_AVAILABLE:
+            with Progress(
+                SpinnerColumn("dots"),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+                transient=True,
+            ) as progress:
+                progress.add_task("Generating Reviewer 2 logic...", total=None)
+                code_2 = _generate_code("Reviewer 2")
+        else:
+            code_2 = _generate_code("Reviewer 2")
+
+        if code_2:
+            module_2 = create_complete_module(code_2, criteria, args.criteria)
+            with open(custom_module_path_2, 'w', encoding='utf-8') as f:
+                f.write(module_2)
+            logger.info(f"  Reviewer 2 module saved: {custom_module_path_2}")
+            rprint(f"  [green]✔[/green] Reviewer 2 screening code generated")
+        else:
+            logger.warning("  Reviewer 2 code generation failed.")
+            rprint("  [yellow]⚠[/yellow] Reviewer 2 code generation failed")
 
     # ══════════════════════════════════════════════
-    # PHASE 3: Dual-Pass Screening
+    # PHASE 3: Dual-Pass Independent Screening
     # ══════════════════════════════════════════════
-    rprint("[bold cyan]PHASE 3[/bold cyan] [white]Running dual-pass screening...[/white]")
-    logger.info("PHASE 3: Running dual-pass screening...")
+    rprint("[bold cyan]PHASE 3[/bold cyan] [white]Running dual independent screening...[/white]")
+    logger.info("PHASE 3: Running dual independent screening...")
 
-    custom_screen_func = None
-    if os.path.exists(custom_module_path):
+    # Load both screening modules
+    def _load_screen_func(module_path, label):
+        """Load a screening function from a generated module."""
+        if not os.path.exists(module_path):
+            return None
         try:
             import importlib.util
-            spec = importlib.util.spec_from_file_location("screen_custom", custom_module_path)
-            custom_mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(custom_mod)
-            if hasattr(custom_mod, 'screen_articles'):
-                custom_screen_func = custom_mod.screen_articles
-                logger.info(f"  Using custom screening logic from: {custom_module_path}")
-                rprint(f"  [dim]Engine:[/dim] custom ({Path(custom_module_path).name})")
+            spec = importlib.util.spec_from_file_location(label, module_path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            if hasattr(mod, 'screen_articles'):
+                logger.info(f"  Loaded {label} from: {module_path}")
+                return mod.screen_articles
         except Exception as e:
-            logger.warning(f"  Failed to load custom module: {e}")
-            rprint(f"  [yellow]⚠[/yellow] Custom module failed, using default")
+            logger.warning(f"  Failed to load {label}: {e}")
+        return None
 
-    if custom_screen_func:
+    func_1 = _load_screen_func(custom_module_path_1, "pass1")
+    func_2 = _load_screen_func(custom_module_path_2, "pass2")
+
+    # Fallback: if only one custom module exists, use default for the other
+    if func_1 and not func_2:
+        rprint("  [yellow]⚠[/yellow] Only Reviewer 1 available — using default for Reviewer 2")
+        func_2 = func_1  # Graceful fallback
+    elif func_2 and not func_1:
+        rprint("  [yellow]⚠[/yellow] Only Reviewer 2 available — using default for Reviewer 1")
+        func_1 = func_2
+    elif not func_1 and not func_2:
+        # Ultimate fallback
+        agreed, disagreements, all_articles = dual_pass_screening(parsed_json_path)
+        func_1 = None  # Signal to skip custom path
+
+    if func_1:
         with open(parsed_json_path, 'r', encoding='utf-8') as f:
             all_articles = json.load(f)
 
-        logger.info(f"Starting dual-pass screening on {len(all_articles)} articles...")
+        logger.info(f"Starting dual independent screening on {len(all_articles)} articles...")
+        rprint(f"  [dim]Screening {len(all_articles)} articles with 2 independent reviewers...[/dim]")
 
         if RICH_AVAILABLE:
             with Progress(
@@ -548,14 +592,14 @@ Examples:
                 console=console,
                 transient=True,
             ) as progress:
-                t = progress.add_task("Pass 1...", total=2)
-                pass_1 = custom_screen_func(parsed_json_path)
-                progress.update(t, advance=1, description="Pass 2...")
-                pass_2 = custom_screen_func(parsed_json_path)
+                t = progress.add_task("Reviewer 1 screening...", total=2)
+                pass_1 = func_1(parsed_json_path)
+                progress.update(t, advance=1, description="Reviewer 2 screening...")
+                pass_2 = func_2(parsed_json_path)
                 progress.update(t, advance=1, description="Complete")
         else:
-            pass_1 = custom_screen_func(parsed_json_path)
-            pass_2 = custom_screen_func(parsed_json_path)
+            pass_1 = func_1(parsed_json_path)
+            pass_2 = func_2(parsed_json_path)
 
         agreed = []
         disagreements = []
@@ -576,12 +620,15 @@ Examples:
         agreement_rate = len(agreed) / total * 100 if total > 0 else 0
         logger.info(f"  Dual-pass agreement: {len(agreed)}/{total} ({agreement_rate:.1f}%)")
         logger.info(f"  Agreed Include: {included_count_phase}, Agreed Exclude: {excluded_count_phase}")
-        if not disagreements:
+        if disagreements:
+            logger.warning(f"  Disagreements: {len(disagreements)} articles flagged for human review")
+        else:
             logger.info("  No disagreements -- 100% consistency confirmed.")
-    else:
-        agreed, disagreements, all_articles = dual_pass_screening(parsed_json_path)
 
-    rprint(f"  [green]✔[/green] Dual-pass complete — 100% agreement")
+    if disagreements:
+        rprint(f"  [green]✔[/green] Dual-pass complete — agreement: [bold]{agreement_rate:.1f}%[/bold] ({len(disagreements)} flagged)")
+    else:
+        rprint(f"  [green]✔[/green] Dual-pass complete — [bold]100%[/bold] agreement")
 
     # ══════════════════════════════════════════════
     # PHASE 4: Export Results

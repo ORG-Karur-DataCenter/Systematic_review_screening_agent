@@ -91,7 +91,7 @@ def generate_via_api(prompt_text, api_key, model_name="gemini-2.5-flash"):
         model_name,
         generation_config={
             "temperature": 0.2,
-            "max_output_tokens": 16384,  # Code generation needs room
+            "max_output_tokens": 16384,
         }
     )
 
