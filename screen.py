@@ -36,7 +36,15 @@ try:
 except ImportError:
     RICH_AVAILABLE = False
 
-console = Console() if RICH_AVAILABLE else None
+# Force UTF-8 output on Windows to support unicode glyphs
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
+console = Console(force_terminal=True) if RICH_AVAILABLE else None
 
 # Structured logging — file only when rich is available (to avoid duplicating console output)
 log_handlers = [logging.FileHandler("screening_pipeline.log", mode='a', encoding='utf-8')]
@@ -243,21 +251,77 @@ def rprint(msg, style=None):
         print(msg)
 
 
+def auto_detect_articles(search_dir="."):
+    """
+    Auto-detect article files in the current directory.
+    Priority: *_deduplicated* files first (output from dedup agent), then any .bib/.ris/.txt.
+    Excludes criteria files, generated code, logs, and output files.
+    """
+    SKIP_NAMES = {
+        'parsed_articles.json', 'screening_results.csv', 'screening_disagreements.csv',
+        'screening_pipeline.log', 'screening_gen_run.log', 'screening_run.log',
+        'screen_articles_custom.py', 'included_articles.ris',
+    }
+    ARTICLE_EXTENSIONS = {'.bib', '.ris', '.txt', '.nbib'}
+
+    candidates = []
+    for f in Path(search_dir).iterdir():
+        if not f.is_file():
+            continue
+        if f.name in SKIP_NAMES:
+            continue
+        if f.suffix.lower() not in ARTICLE_EXTENSIONS:
+            continue
+        # Skip criteria files
+        if 'criteria' in f.name.lower():
+            continue
+        # Skip tiny files (likely not article exports)
+        if f.stat().st_size < 500:
+            continue
+
+        # Check if it's actually an article file (sniff first 1000 chars)
+        try:
+            with open(f, 'r', encoding='utf-8', errors='replace') as fh:
+                head = fh.read(1000)
+            # Must look like PubMed, RIS, or BibTeX
+            if any(marker in head for marker in ['PMID-', 'TI  -', 'TY  -', '@article', '@Article', '@inproceedings']):
+                candidates.append(str(f))
+        except Exception:
+            continue
+
+    # Sort: *_deduplicated* files first, then alphabetical
+    def sort_key(path):
+        name = Path(path).name.lower()
+        return (0 if 'deduplicated' in name else 1, name)
+
+    return sorted(candidates, key=sort_key)
+
+
+def auto_detect_criteria(search_dir="."):
+    """Auto-detect a criteria file in the current directory."""
+    for pattern in ['*criteria*', '*CRITERIA*', '*Criteria*']:
+        for f in Path(search_dir).glob(pattern):
+            if f.is_file() and f.suffix.lower() in {'.txt', '.docx', '.json'}:
+                return str(f)
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="One-command systematic review screening pipeline",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python screen.py --criteria criteria.txt --articles articles.bib
-  python screen.py --criteria criteria.txt --articles articles.txt articles2.bib
-  python screen.py --criteria criteria.txt --articles export.ris --api-key YOUR_KEY
+  python screen.py                                      # Auto-detect everything
+  python screen.py --criteria criteria.txt               # Auto-detect articles
+  python screen.py --articles data.bib                   # Auto-detect criteria
+  python screen.py --api-key YOUR_KEY                    # Auto-detect + fast API mode
         """
     )
-    parser.add_argument("--criteria", required=True,
-                        help="Path to criteria file (.txt, .docx, or .json)")
-    parser.add_argument("--articles", required=True, nargs='+',
-                        help="Path to articles file(s) (.bib, .ris, .json, .txt)")
+    parser.add_argument("--criteria", default=None,
+                        help="Path to criteria file (auto-detected if not provided)")
+    parser.add_argument("--articles", default=None, nargs='+',
+                        help="Path to articles file(s) (auto-detected if not provided)")
     parser.add_argument("--browser", default="chrome",
                         help="Browser channel for code generation (default: chrome)")
     parser.add_argument("--api-key", default=None,
@@ -290,6 +354,29 @@ Examples:
         print("  SYSTEMATIC REVIEW SCREENING PIPELINE")
         print("=" * 70 + "\n")
 
+    # ── Auto-detect inputs ──
+    if args.criteria is None:
+        detected = auto_detect_criteria()
+        if detected:
+            args.criteria = detected
+            rprint(f"  [green]✔[/green] Auto-detected criteria: [bold]{detected}[/bold]")
+        else:
+            rprint("[bold red]✘[/bold red] No criteria file found. Provide --criteria or place a *criteria*.txt file here.")
+            sys.exit(1)
+
+    if args.articles is None:
+        detected = auto_detect_articles()
+        if detected:
+            args.articles = detected
+            rprint(f"  [green]✔[/green] Auto-detected [bold]{len(detected)}[/bold] article file(s):")
+            for af in detected:
+                rprint(f"      [dim]→[/dim] {Path(af).name}")
+        else:
+            rprint("[bold red]✘[/bold red] No article files found. Provide --articles or place .bib/.ris/.txt files here.")
+            sys.exit(1)
+
+    rprint("")
+
     # ── Validate Inputs ──
     if not os.path.exists(args.criteria):
         rprint(f"[bold red]✘[/bold red] Criteria file not found: {args.criteria}")
@@ -308,7 +395,7 @@ Examples:
         config_table.add_column(style="dim")
         config_table.add_column(style="bold")
         config_table.add_row("Criteria", str(args.criteria))
-        config_table.add_row("Articles", ", ".join(args.articles))
+        config_table.add_row("Articles", ", ".join(Path(a).name for a in args.articles))
         config_table.add_row("Mode", "API" if args.api_key else f"Browser ({args.browser})")
         config_table.add_row("Model", args.model)
         console.print(Panel(config_table, title="[bold]Configuration", border_style="dim"))
