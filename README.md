@@ -53,7 +53,7 @@ python screen.py --criteria my_criteria.txt --articles my_articles.bib
 
 That's it. A browser window opens, Gemini generates your custom screening logic, articles are screened, and results are exported — all in one command.
 
-#### Want it faster? Add an API key:
+#### Want it faster? Add your Gemini API key:
 
 ```bash
 python screen.py --criteria my_criteria.txt --articles my_articles.ris --api-key YOUR_KEY
