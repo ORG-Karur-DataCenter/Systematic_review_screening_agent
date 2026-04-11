@@ -6,8 +6,8 @@ def parse_bib(file_path):
     with open(file_path, 'r', encoding='utf-8') as f:
         content = f.read()
     
-    # Split by entries
-    entries = re.split(r'@article\{', content)[1:]
+    # Split by entries — case-insensitive, support all BibTeX entry types
+    entries = re.split(r'@\w+\{', content, flags=re.IGNORECASE)[1:]
     parsed_entries = []
     
     for entry in entries:
@@ -16,12 +16,14 @@ def parse_bib(file_path):
         
         entry_data = {'key': key}
         
-        # Simple regex for fields
+        # Simple regex for fields — handles spaces/tabs around '='
         fields = ['title', 'abstract', 'journal', 'year', 'author', 'doi']
         for field in fields:
-            match = re.search(rf'{field}=\{{(.*?)\}}', entry, re.DOTALL | re.IGNORECASE)
+            match = re.search(rf'{field}\s*=\s*\{{(.*?)\}}', entry, re.DOTALL | re.IGNORECASE)
             if match:
-                entry_data[field] = match.group(1).strip().replace('\n', ' ')
+                entry_data[field] = match.group(1).strip().replace('\n', ' ').replace('\t', ' ')
+                # Clean up multiple spaces
+                entry_data[field] = re.sub(r'\s+', ' ', entry_data[field])
             else:
                 entry_data[field] = ""
         
