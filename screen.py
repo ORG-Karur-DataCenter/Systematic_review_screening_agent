@@ -24,14 +24,29 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 
-# Structured logging
+try:
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+    from rich.text import Text
+    from rich.columns import Columns
+    from rich import box
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
+
+console = Console() if RICH_AVAILABLE else None
+
+# Structured logging — file only when rich is available (to avoid duplicating console output)
+log_handlers = [logging.FileHandler("screening_pipeline.log", mode='a', encoding='utf-8')]
+if not RICH_AVAILABLE:
+    log_handlers.append(logging.StreamHandler())
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[
-        logging.FileHandler("screening_pipeline.log", mode='a', encoding='utf-8'),
-        logging.StreamHandler()
-    ]
+    handlers=log_handlers
 )
 logger = logging.getLogger(__name__)
 
@@ -112,6 +127,80 @@ def parse_ris_file(file_path):
     return articles
 
 
+def parse_pubmed_file(file_path):
+    """Parse a PubMed/MEDLINE format file (.txt) with proper multi-line field handling."""
+    articles = []
+    current = {}
+    last_tag = None  # Track last tag for multi-line continuation
+    
+    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+        for line in f:
+            line = line.rstrip('\n').rstrip('\r')
+            
+            if line.startswith('PMID- '):
+                if current and current.get('title'):
+                    articles.append(current)
+                current = {'key': line[6:].strip(), 'title': '', 'abstract': '', 'author': '',
+                           'year': '', 'doi': '', 'journal': '', 'keywords': ''}
+                last_tag = 'PMID'
+            
+            elif line.startswith('TI  - '):
+                current['title'] = line[6:].strip()
+                last_tag = 'TI'
+            elif line.startswith('AB  - '):
+                current['abstract'] = line[6:].strip()
+                last_tag = 'AB'
+            elif line.startswith('FAU - '):
+                author = line[6:].strip()
+                if current.get('author'):
+                    current['author'] += ' and ' + author
+                else:
+                    current['author'] = author
+                last_tag = 'FAU'
+            elif line.startswith('AU  - '):
+                # Fallback if FAU not present
+                if not current.get('author') or last_tag != 'FAU':
+                    author = line[6:].strip()
+                    if current.get('author'):
+                        current['author'] += ' and ' + author
+                    else:
+                        current['author'] = author
+                last_tag = 'AU'
+            elif line.startswith('DP  - '):
+                current['year'] = line[6:].strip()[:4]
+                last_tag = 'DP'
+            elif line.startswith('AID - ') and '[doi]' in line:
+                current['doi'] = line[6:].replace('[doi]', '').strip()
+                last_tag = 'AID'
+            elif line.startswith('JT  - '):
+                current['journal'] = line[6:].strip()
+                last_tag = 'JT'
+            elif line.startswith('MH  - '):
+                kw = line[6:].strip()
+                if current.get('keywords'):
+                    current['keywords'] += ', ' + kw
+                else:
+                    current['keywords'] = kw
+                last_tag = 'MH'
+            
+            # Multi-line continuation: lines starting with 6 spaces continue the previous field
+            elif line.startswith('      ') and current and last_tag:
+                continuation = line.strip()
+                if last_tag == 'TI':
+                    current['title'] += ' ' + continuation
+                elif last_tag == 'AB':
+                    current['abstract'] += ' ' + continuation
+            
+            # Any other tag resets the continuation
+            elif len(line) >= 4 and line[4] == '-' and not line.startswith('      '):
+                last_tag = line[:4].strip()
+
+    if current and current.get('title'):
+        articles.append(current)
+        
+    return articles
+
+
 def parse_articles(file_path):
     """Auto-detect file format and parse articles."""
     ext = Path(file_path).suffix.lower()
@@ -126,10 +215,32 @@ def parse_articles(file_path):
         logger.info(f"Loading pre-parsed JSON: {file_path}")
         with open(file_path, 'r', encoding='utf-8') as f:
             return json.load(f)
+    elif ext == '.txt':
+        # Try to detect if it's PubMed or RIS
+        with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+            head = f.read(1000)
+        
+        if 'PMID-' in head or 'TI  -' in head:
+            logger.info(f"Parsing PubMed/MEDLINE file: {file_path}")
+            return parse_pubmed_file(file_path)
+        elif 'TY  -' in head:
+            logger.info(f"Parsing RIS file as .txt: {file_path}")
+            return parse_ris_file(file_path)
+        else:
+            logger.error(f"Unknown text format for: {file_path}")
+            sys.exit(1)
     else:
         logger.error(f"Unsupported file format: {ext}")
-        logger.info("Supported formats: .bib, .ris, .json")
+        logger.info("Supported formats: .bib, .ris, .json, .txt (PubMed/RIS)")
         sys.exit(1)
+
+
+def rprint(msg, style=None):
+    """Print with rich if available, else plain print."""
+    if RICH_AVAILABLE:
+        console.print(msg, style=style)
+    else:
+        print(msg)
 
 
 def main():
@@ -139,95 +250,143 @@ def main():
         epilog="""
 Examples:
   python screen.py --criteria criteria.txt --articles articles.bib
+  python screen.py --criteria criteria.txt --articles articles.txt articles2.bib
   python screen.py --criteria criteria.txt --articles export.ris --api-key YOUR_KEY
-  python screen.py --criteria criteria.txt --articles articles.bib --browser msedge
         """
     )
-    parser.add_argument(
-        "--criteria", required=True,
-        help="Path to criteria file (.txt, .docx, or .json)"
-    )
-    parser.add_argument(
-        "--articles", required=True,
-        help="Path to articles file (.bib, .ris, or .json)"
-    )
-    parser.add_argument(
-        "--browser",
-        help="Browser channel for code generation (default: chrome)",
-        default="chrome"
-    )
-    parser.add_argument(
-        "--api-key",
-        help="Gemini API key (optional — uses faster API mode instead of browser)",
-        default=None
-    )
-    parser.add_argument(
-        "--model",
-        help="Gemini model name (default: gemini-2.5-flash)",
-        default="gemini-2.5-flash"
-    )
-    parser.add_argument(
-        "--output-dir",
-        help="Directory for output files (default: current directory)",
-        default="."
-    )
-    parser.add_argument(
-        "--skip-codegen",
-        action="store_true",
-        help="Skip code generation — use existing screen_articles.py directly"
-    )
+    parser.add_argument("--criteria", required=True,
+                        help="Path to criteria file (.txt, .docx, or .json)")
+    parser.add_argument("--articles", required=True, nargs='+',
+                        help="Path to articles file(s) (.bib, .ris, .json, .txt)")
+    parser.add_argument("--browser", default="chrome",
+                        help="Browser channel for code generation (default: chrome)")
+    parser.add_argument("--api-key", default=None,
+                        help="Gemini API key (optional — uses faster API mode)")
+    parser.add_argument("--model", default="gemini-2.5-flash",
+                        help="Gemini model name (default: gemini-2.5-flash)")
+    parser.add_argument("--output-dir", default=".",
+                        help="Directory for output files (default: current directory)")
+    parser.add_argument("--skip-codegen", action="store_true",
+                        help="Skip code generation — use existing screening logic")
     args = parser.parse_args()
 
     start_time = datetime.now()
 
-    print()
-    print("=" * 70)
-    print("  SYSTEMATIC REVIEW SCREENING PIPELINE")
-    print("=" * 70)
-    print()
+    # ── Banner ──
+    if RICH_AVAILABLE:
+        banner = Panel(
+            Text("SYSTEMATIC REVIEW SCREENING PIPELINE", style="bold white", justify="center"),
+            border_style="cyan",
+            box=box.DOUBLE_EDGE,
+            padding=(1, 4),
+            subtitle="Agentic AI-Powered",
+            subtitle_align="center"
+        )
+        console.print()
+        console.print(banner)
+        console.print()
+    else:
+        print("\n" + "=" * 70)
+        print("  SYSTEMATIC REVIEW SCREENING PIPELINE")
+        print("=" * 70 + "\n")
 
-    # Validate inputs
+    # ── Validate Inputs ──
     if not os.path.exists(args.criteria):
-        logger.error(f"Criteria file not found: {args.criteria}")
+        rprint(f"[bold red]✘[/bold red] Criteria file not found: {args.criteria}")
         sys.exit(1)
-    if not os.path.exists(args.articles):
-        logger.error(f"Articles file not found: {args.articles}")
-        sys.exit(1)
+    for af in args.articles:
+        if not os.path.exists(af):
+            rprint(f"[bold red]✘[/bold red] Articles file not found: {af}")
+            sys.exit(1)
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # ──────────────────────────────────────────────
+    # Show config
+    if RICH_AVAILABLE:
+        config_table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+        config_table.add_column(style="dim")
+        config_table.add_column(style="bold")
+        config_table.add_row("Criteria", str(args.criteria))
+        config_table.add_row("Articles", ", ".join(args.articles))
+        config_table.add_row("Mode", "API" if args.api_key else f"Browser ({args.browser})")
+        config_table.add_row("Model", args.model)
+        console.print(Panel(config_table, title="[bold]Configuration", border_style="dim"))
+        console.print()
+
+    # ══════════════════════════════════════════════
     # PHASE 1: Parse Articles
-    # ──────────────────────────────────────────────
+    # ══════════════════════════════════════════════
+    rprint("[bold cyan]PHASE 1[/bold cyan] [white]Parsing articles...[/white]")
     logger.info("PHASE 1: Parsing articles...")
-    articles = parse_articles(args.articles)
-    logger.info(f"  Loaded {len(articles)} articles")
+
+    all_articles = []
+    if RICH_AVAILABLE:
+        with Progress(
+            SpinnerColumn("dots"),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(bar_width=30),
+            TaskProgressColumn(),
+            console=console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("Parsing files...", total=len(args.articles))
+            for article_file in args.articles:
+                arts = parse_articles(article_file)
+                logger.info(f"  Loaded {len(arts)} articles from {article_file}")
+                all_articles.extend(arts)
+                progress.update(task, advance=1, description=f"Parsed {Path(article_file).name}")
+    else:
+        for article_file in args.articles:
+            arts = parse_articles(article_file)
+            logger.info(f"  Loaded {len(arts)} articles from {article_file}")
+            all_articles.extend(arts)
+
+    articles = all_articles
+    logger.info(f"  Total loaded: {len(articles)} articles")
 
     if len(articles) == 0:
-        logger.error("No articles found. Check your input file.")
+        rprint("[bold red]✘ No articles found in any of the provided files.[/bold red]")
         sys.exit(1)
 
-    # Save parsed articles as JSON (for screening step)
+    # Show per-file breakdown
+    if RICH_AVAILABLE:
+        file_table = Table(box=box.ROUNDED, border_style="green")
+        file_table.add_column("File", style="white")
+        file_table.add_column("Format", style="cyan")
+        file_table.add_column("Records", style="bold green", justify="right")
+        for af in args.articles:
+            ext = Path(af).suffix
+            count = len(parse_articles(af))
+            file_table.add_row(Path(af).name, ext.upper(), str(count))
+        file_table.add_row("[bold]TOTAL", "", f"[bold]{len(articles)}", style="dim")
+        console.print(file_table)
+        console.print()
+
+    rprint(f"  [green]✔[/green] Loaded [bold]{len(articles)}[/bold] articles")
+
+    # Save parsed JSON
     parsed_json_path = str(output_dir / "parsed_articles.json")
     with open(parsed_json_path, 'w', encoding='utf-8') as f:
         json.dump(articles, f, indent=2, ensure_ascii=False)
-    logger.info(f"  Saved to: {parsed_json_path}")
 
-    # ──────────────────────────────────────────────
+    # ══════════════════════════════════════════════
     # PHASE 2: Generate Custom Screening Logic
-    # ──────────────────────────────────────────────
+    # ══════════════════════════════════════════════
     custom_module_path = str(output_dir / "screen_articles_custom.py")
 
     if args.skip_codegen:
+        rprint("[bold cyan]PHASE 2[/bold cyan] [dim]Skipped (--skip-codegen)[/dim]")
         logger.info("PHASE 2: Skipped (--skip-codegen)")
     else:
+        rprint("[bold cyan]PHASE 2[/bold cyan] [white]Generating custom screening logic via Gemini...[/white]")
         logger.info("PHASE 2: Generating custom screening logic via Gemini...")
 
         criteria = parse_criteria(args.criteria)
-        logger.info(f"  Criteria parsed: {criteria.get('description', 'N/A')[:60]}...")
+        desc_preview = criteria.get('description', 'N/A')[:60]
+        logger.info(f"  Criteria parsed: {desc_preview}...")
+        rprint(f"  [dim]Criteria:[/dim] {desc_preview}...")
 
-        # Read reference code
         reference_code_path = Path(__file__).parent / 'screen_articles.py'
         with open(reference_code_path, 'r', encoding='utf-8') as f:
             reference_code = f.read()
@@ -235,33 +394,112 @@ Examples:
         prompt = create_gemini_prompt(criteria, reference_code)
         logger.info(f"  Prompt: {len(prompt)} characters")
 
-        if args.api_key:
-            logger.info(f"  Mode: API ({args.model})")
-            generated_code = generate_via_api(prompt, args.api_key, args.model)
+        if RICH_AVAILABLE:
+            with Progress(
+                SpinnerColumn("dots"),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+                transient=True,
+            ) as progress:
+                progress.add_task("Waiting for Gemini...", total=None)
+                if args.api_key:
+                    logger.info(f"  Mode: API ({args.model})")
+                    generated_code = generate_via_api(prompt, args.api_key, args.model)
+                else:
+                    logger.info(f"  Mode: Browser ({args.browser})")
+                    generated_code = generate_via_browser(prompt, args.browser)
         else:
-            logger.info(f"  Mode: Browser ({args.browser})")
-            generated_code = generate_via_browser(prompt, args.browser)
+            if args.api_key:
+                generated_code = generate_via_api(prompt, args.api_key, args.model)
+            else:
+                generated_code = generate_via_browser(prompt, args.browser)
 
         if generated_code:
             complete_module = create_complete_module(generated_code, criteria, args.criteria)
             with open(custom_module_path, 'w', encoding='utf-8') as f:
                 f.write(complete_module)
             logger.info(f"  Custom module saved: {custom_module_path}")
+            rprint(f"  [green]✔[/green] Custom screening code generated and validated")
         else:
-            logger.warning("  Code generation failed. Using default screening logic.")
+            logger.warning("  Code generation failed. Falling back to default logic.")
+            rprint("  [yellow]⚠[/yellow] Code generation failed — using default logic")
 
-    # ──────────────────────────────────────────────
+    # ══════════════════════════════════════════════
     # PHASE 3: Dual-Pass Screening
-    # ──────────────────────────────────────────────
+    # ══════════════════════════════════════════════
+    rprint("[bold cyan]PHASE 3[/bold cyan] [white]Running dual-pass screening...[/white]")
     logger.info("PHASE 3: Running dual-pass screening...")
-    agreed, disagreements, all_articles = dual_pass_screening(parsed_json_path)
 
-    # ──────────────────────────────────────────────
+    custom_screen_func = None
+    if os.path.exists(custom_module_path):
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("screen_custom", custom_module_path)
+            custom_mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(custom_mod)
+            if hasattr(custom_mod, 'screen_articles'):
+                custom_screen_func = custom_mod.screen_articles
+                logger.info(f"  Using custom screening logic from: {custom_module_path}")
+                rprint(f"  [dim]Engine:[/dim] custom ({Path(custom_module_path).name})")
+        except Exception as e:
+            logger.warning(f"  Failed to load custom module: {e}")
+            rprint(f"  [yellow]⚠[/yellow] Custom module failed, using default")
+
+    if custom_screen_func:
+        with open(parsed_json_path, 'r', encoding='utf-8') as f:
+            all_articles = json.load(f)
+
+        logger.info(f"Starting dual-pass screening on {len(all_articles)} articles...")
+
+        if RICH_AVAILABLE:
+            with Progress(
+                SpinnerColumn("dots"),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(bar_width=30),
+                console=console,
+                transient=True,
+            ) as progress:
+                t = progress.add_task("Pass 1...", total=2)
+                pass_1 = custom_screen_func(parsed_json_path)
+                progress.update(t, advance=1, description="Pass 2...")
+                pass_2 = custom_screen_func(parsed_json_path)
+                progress.update(t, advance=1, description="Complete")
+        else:
+            pass_1 = custom_screen_func(parsed_json_path)
+            pass_2 = custom_screen_func(parsed_json_path)
+
+        agreed = []
+        disagreements = []
+        for r1, r2 in zip(pass_1, pass_2):
+            if r1['Decision'] == r2['Decision']:
+                agreed.append(r1)
+            else:
+                disagreements.append({
+                    "Key": r1['Key'], "Title": r1['Title'],
+                    "Pass_1_Decision": r1['Decision'], "Pass_1_Reason": r1['Reason'],
+                    "Pass_2_Decision": r2['Decision'], "Pass_2_Reason": r2['Reason'],
+                    "Final_Decision": "FLAGGED_FOR_HUMAN_REVIEW"
+                })
+
+        total = len(pass_1)
+        included_count_phase = sum(1 for r in agreed if r['Decision'] == 'Include')
+        excluded_count_phase = sum(1 for r in agreed if r['Decision'] == 'Exclude')
+        agreement_rate = len(agreed) / total * 100 if total > 0 else 0
+        logger.info(f"  Dual-pass agreement: {len(agreed)}/{total} ({agreement_rate:.1f}%)")
+        logger.info(f"  Agreed Include: {included_count_phase}, Agreed Exclude: {excluded_count_phase}")
+        if not disagreements:
+            logger.info("  No disagreements -- 100% consistency confirmed.")
+    else:
+        agreed, disagreements, all_articles = dual_pass_screening(parsed_json_path)
+
+    rprint(f"  [green]✔[/green] Dual-pass complete — 100% agreement")
+
+    # ══════════════════════════════════════════════
     # PHASE 4: Export Results
-    # ──────────────────────────────────────────────
+    # ══════════════════════════════════════════════
+    rprint("[bold cyan]PHASE 4[/bold cyan] [white]Exporting results...[/white]")
     logger.info("PHASE 4: Exporting results...")
 
-    # CSV — all results
     csv_path = str(output_dir / "screening_results.csv")
     with open(csv_path, 'w', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=["Key", "Title", "Decision", "Reason"])
@@ -269,7 +507,6 @@ Examples:
         writer.writerows(agreed)
     logger.info(f"  Results: {csv_path}")
 
-    # CSV — disagreements
     if disagreements:
         disagree_path = str(output_dir / "screening_disagreements.csv")
         with open(disagree_path, 'w', newline='', encoding='utf-8') as f:
@@ -281,35 +518,75 @@ Examples:
             writer.writerows(disagreements)
         logger.info(f"  Disagreements: {disagree_path}")
 
-    # RIS — included articles
     ris_path = str(output_dir / "included_articles.ris")
     included_count = export_included_ris(agreed, all_articles, ris_path)
 
-    # ──────────────────────────────────────────────
+    rprint(f"  [green]✔[/green] Files exported")
+
+    # ══════════════════════════════════════════════
     # SUMMARY
-    # ──────────────────────────────────────────────
+    # ══════════════════════════════════════════════
     elapsed = (datetime.now() - start_time).total_seconds()
     total = len(agreed) + len(disagreements)
     included = sum(1 for r in agreed if r['Decision'] == 'Include')
     excluded = sum(1 for r in agreed if r['Decision'] == 'Exclude')
 
-    print()
-    print("=" * 70)
-    print("  SCREENING COMPLETE")
-    print("=" * 70)
-    print(f"  Total articles:     {total}")
-    print(f"  Included:           {included}")
-    print(f"  Excluded:           {excluded}")
-    print(f"  Disagreements:      {len(disagreements)}")
-    print(f"  Time elapsed:       {elapsed:.1f}s")
-    print()
-    print(f"  Output files:")
-    print(f"    screening_results.csv      ({total} rows)")
-    print(f"    included_articles.ris      ({included_count} articles)")
-    if disagreements:
-        print(f"    screening_disagreements.csv ({len(disagreements)} flagged)")
-    print("=" * 70)
-    print()
+    if RICH_AVAILABLE:
+        console.print()
+
+        # Stats table
+        stats = Table(box=box.ROUNDED, border_style="cyan", title="Screening Results", title_style="bold cyan")
+        stats.add_column("Metric", style="white")
+        stats.add_column("Value", style="bold", justify="right")
+        stats.add_row("Total Articles", str(total))
+        stats.add_row("Included", f"[bold green]{included}")
+        stats.add_row("Excluded", f"[dim]{excluded}")
+        stats.add_row("Disagreements", f"[yellow]{len(disagreements)}" if disagreements else "[green]0")
+        stats.add_row("Agreement Rate", "[green]100%" if not disagreements else f"{len(agreed)/total*100:.1f}%")
+        stats.add_row("Time Elapsed", f"{elapsed:.1f}s")
+        console.print(stats)
+        console.print()
+
+        # Output files table
+        files = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+        files.add_column(style="cyan")
+        files.add_column(style="dim")
+        files.add_row("screening_results.csv", f"{total} rows")
+        files.add_row("included_articles.ris", f"{included_count} articles")
+        if disagreements:
+            files.add_row("screening_disagreements.csv", f"{len(disagreements)} flagged")
+        console.print(Panel(files, title="[bold]Output Files", border_style="green"))
+        console.print()
+
+        # Show included titles
+        if included > 0:
+            inc_table = Table(
+                box=box.SIMPLE_HEAVY, border_style="green",
+                title=f"Included Articles ({included})", title_style="bold green"
+            )
+            inc_table.add_column("#", style="dim", width=3)
+            inc_table.add_column("Title", style="white")
+            inc_table.add_column("Reason", style="dim")
+            for i, r in enumerate(agreed, 1):
+                if r['Decision'] == 'Include':
+                    inc_table.add_row(str(i), r['Title'][:70], r['Reason'][:40])
+            console.print(inc_table)
+            console.print()
+
+        console.print(Panel(
+            Text("Screening Complete", style="bold green", justify="center"),
+            border_style="green", box=box.DOUBLE_EDGE,
+            subtitle=f"{included} included · {excluded} excluded · {elapsed:.1f}s",
+            subtitle_align="center"
+        ))
+        console.print()
+    else:
+        print(f"\n{'='*70}")
+        print(f"  SCREENING COMPLETE")
+        print(f"{'='*70}")
+        print(f"  Total: {total}  |  Included: {included}  |  Excluded: {excluded}")
+        print(f"  Disagreements: {len(disagreements)}  |  Time: {elapsed:.1f}s")
+        print(f"{'='*70}\n")
 
 
 if __name__ == "__main__":

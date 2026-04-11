@@ -35,6 +35,15 @@ def parse_text_criteria(file_path: str) -> Dict[str, Any]:
     with open(file_path, 'r', encoding='utf-8') as f:
         content = f.read()
     
+    # Check if the file uses [SECTION] headers
+    has_sections = bool(re.search(r'\[\w+', content))
+    
+    if not has_sections:
+        # Free-text / paragraph format — pass entire text as description
+        # Gemini will interpret the criteria directly from the prose
+        criteria['description'] = content.strip()
+        return criteria
+    
     current_section = None
     
     for line in content.split('\n'):
