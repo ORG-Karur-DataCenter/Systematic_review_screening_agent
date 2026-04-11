@@ -1,8 +1,9 @@
 <p align="center">
   <h1 align="center">Systematic Review Screening Agent</h1>
   <p align="center">
-    AI-powered title & abstract screening for systematic reviews.<br>
-    One command. Criteria in, included articles out.
+    AI-powered title &amp; abstract screening for systematic reviews.<br>
+    Dual independent AI reviewers. Disagreements exported for human adjudication.<br>
+    Zero-config. One command.
   </p>
 </p>
 
@@ -10,6 +11,7 @@
   <a href="#quickstart">Quickstart</a> •
   <a href="#how-it-works">How It Works</a> •
   <a href="#output">Output</a> •
+  <a href="#criteria-file-format">Criteria Format</a> •
   <a href="#advanced">Advanced</a> •
   <a href="#contributing">Contributing</a>
 </p>
@@ -38,117 +40,158 @@ playwright install chromium
 
 ### 2. Prepare Your Inputs
 
-You need two files:
+Place your files in the working directory:
 
 | File | Description | Formats |
 |------|-------------|---------|
-| **Criteria file** | Your inclusion/exclusion rules | `.txt`, `.docx`, `.json` |
-| **Articles file** | Exported bibliography from database search | `.bib`, `.ris`, `.json` |
+| **Criteria file** | Your inclusion/exclusion criteria | `.txt`, `.docx`, `.json` |
+| **Article files** | Exported bibliographies from database searches | `.bib`, `.ris`, `.txt` (PubMed/MEDLINE), `.nbib` |
 
 ### 3. Run
 
 ```bash
-python screen.py --criteria my_criteria.txt --articles my_articles.bib
+# Zero-config — auto-detects criteria and article files
+python screen.py
+
+# Or specify files explicitly
+python screen.py --criteria my_criteria.txt --articles pubmed.txt scopus.bib wos.bib
 ```
 
-That's it. A browser window opens, Gemini generates your custom screening logic, articles are screened, and results are exported — all in one command.
+A browser opens, Gemini generates **two independent screening algorithms**, articles are screened by both, and results are exported — all in one command.
 
 #### Want it faster? Add your Gemini API key:
 
 ```bash
-python screen.py --criteria my_criteria.txt --articles my_articles.ris --api-key YOUR_KEY
+python screen.py --api-key YOUR_KEY
 ```
 
-No browser needed. Runs in ~40 seconds.
+No browser needed.
 
 ---
 
 ## How It Works
 
 ```
-                    ┌─────────────────────────┐
-                    │   screen.py             │
-                    │   (one command)          │
-                    └────────┬────────────────┘
-                             │
-              ┌──────────────┼──────────────┐
-              ▼              ▼              ▼
-        ┌──────────┐  ┌───────────┐  ┌──────────┐
-        │ Phase 1  │  │  Phase 2  │  │ Phase 3  │
-        │ Parse    │  │ Generate  │  │ Screen   │
-        │ articles │  │ screening │  │ dual-pass│
-        │ .bib/.ris│  │ logic via │  │ + export │
-        │ → JSON   │  │ Gemini AI │  │ CSV + RIS│
-        └──────────┘  └───────────┘  └──────────┘
+                    ┌──────────────────────────────┐
+                    │     screen.py (orchestrator)  │
+                    └──────────┬───────────────────┘
+                               │
+          ┌────────────────────┼────────────────────┐
+          ▼                    ▼                     ▼
+    ┌──────────┐     ┌─────────────────┐     ┌──────────────┐
+    │ Phase 1  │     │    Phase 2      │     │   Phase 3    │
+    │ Parse    │     │ Generate dual   │     │  Dual indep. │
+    │ articles │     │ independent     │     │  screening + │
+    │ .bib/.ris│     │ screening logic │     │  compare     │
+    │ .txt/.nbib     │ via Gemini AI   │     │  decisions   │
+    │ → JSON   │     │ (Reviewer 1 + 2)│     │              │
+    └──────────┘     └─────────────────┘     └──────┬───────┘
+                                                    │
+                            ┌───────────────────────┼──────────┐
+                            ▼                       ▼          ▼
+                     ┌────────────┐        ┌────────────┐  ┌────────────┐
+                     │  Phase 4   │        │  Phase 5   │  │  Phase 5   │
+                     │  Export    │        │  Export     │  │  (no       │
+                     │  agreed    │        │  disagree-  │  │  disagree- │
+                     │  results   │        │  ments as   │  │  ments)    │
+                     │  CSV + RIS │        │  RIS for    │  │            │
+                     │            │        │  manual     │  │            │
+                     └────────────┘        │  review     │  └────────────┘
+                                           └────────────┘
 ```
 
-### Phase 1 — Parse Articles
-Reads `.bib`, `.ris`, or `.json` files and extracts title, abstract, authors, year, DOI, and journal for each article.
+### Phase 1 — Parse Articles (Auto-Detection)
 
-### Phase 2 — Generate Screening Logic
-Sends your criteria + a reference screening function to Gemini. Gemini generates a custom Python screening function with:
-- Hierarchical decision trees
-- Title vs abstract weighting
-- Contextual exception handling
-- Complex boolean logic for competing diagnoses
+- **Auto-detects** all article files in the working directory (prioritizes `*_deduplicated*` files from the Deduplication Agent)
+- Reads `.bib` (BibTeX), `.ris` (RIS), `.txt`/`.nbib` (PubMed/MEDLINE) formats
+- Supports case-insensitive BibTeX entries (`@ARTICLE`, `@Article`, `@article`) for compatibility with PubMed, Scopus, and Web of Science exports
+- Extracts title, abstract, authors, year, DOI, and journal from each record
 
-The generated code is validated for syntax before use.
+### Phase 2 — Generate Dual Independent Screening Logic
 
-### Phase 3 — Dual-Pass Screening
-Runs the screening function **twice independently** on every article:
-- **Both passes agree → decision finalized** (Include or Exclude)
-- **Passes disagree → flagged for human review**
+Two **independent** calls to Gemini generate **two separate screening algorithms** ("Reviewer 1" and "Reviewer 2"):
 
-Because the screening logic is deterministic (keyword-based generated code), both passes produce identical results — guaranteeing **100% reproducibility**.
+- Each generation produces a self-contained Python function with:
+  - Hierarchical decision trees
+  - Title vs abstract weighting
+  - Contextual exception handling
+  - Complex boolean logic for competing diagnoses
+- Both algorithms are validated for syntax before use
+- Saved as `screen_articles_pass1.py` and `screen_articles_pass2.py` for full auditability
 
-### Phase 4 — Export
-Produces three output files automatically:
-- `screening_results.csv` — all decisions with reasons
-- `included_articles.ris` — valid RIS file of included articles (for import into EndNote/Zotero)
-- `screening_disagreements.csv` — any flagged articles (if applicable)
+> **Why two generations?** Just like two human reviewers interpret inclusion/exclusion criteria independently, each AI generation interprets the criteria slightly differently — producing genuinely independent screening decisions.
+
+### Phase 3 — Dual Independent Screening
+
+Both screening algorithms are executed on the **same** article dataset:
+
+- **Both agree → decision finalised** (Include or Exclude)
+- **Disagree → flagged for human review**
+
+This produces a **meaningful inter-rater agreement rate** (not an artificial 100%), directly analogous to the dual-reviewer workflow in traditional systematic reviews.
+
+### Phase 4 — Export Agreed Results
+
+- `screening_results.csv` — all agreed decisions with reasoning
+- `included_articles.ris` — agreed included articles (for import into EndNote/Zotero/Rayyan)
+- `screening_disagreements.csv` — disagreement details with both reviewers' reasoning
+
+### Phase 5 — Export Disagreements for Manual Review
+
+- `disagreements_for_review.ris` — all disagreed articles exported as a standard RIS file
+- Import directly into **EndNote**, **Zotero**, **Rayyan**, or **Covidence** for manual screening
+- Each record is tagged with `KW  - AI_DISAGREEMENT` for easy identification
 
 ---
 
 ## Criteria File Format
 
-### Text Format (`.txt`) — Recommended
+### Free-Text Format (`.txt`) — Recommended
+
+Write your criteria as natural language. No special headers required:
+
+```
+The inclusion criteria for the systematic review are as follows:
+- Randomised controlled trials (RCTs) comparing cervical disc arthroplasty (CDA) versus ACDF
+- Studies reporting clinical outcomes (NDI, VAS, SF-36)
+- Adult patients with single or multi-level cervical disc disease
+
+Exclusion criteria:
+- Non-comparative studies, case reports, reviews, meta-analyses
+- Cadaveric, biomechanical, or in vitro studies
+- Paediatric populations
+```
+
+### Structured Format (`.txt`)
 
 ```
 [DESCRIPTION]
 Screening for RCTs comparing cervical disc arthroplasty vs ACDF
 
 [INCLUSION_KEYWORDS]
-Primary Topic: Giant Cell Tumor, Osteoclastoma
-Anatomical Location: Cervical, C1, C2, C3, C4, C5, C6, C7
+Primary Topic: Cervical Disc Arthroplasty, CDA, Artificial Disc
+Comparison: ACDF, Anterior Cervical Discectomy
 
 [EXCLUSION_KEYWORDS]
 Study Types: Systematic Review, Meta-Analysis, Case Report
-Competing Diagnoses: Osteoblastoma, Chordoma, Lymphoma
-Non-Bone Types: Synovial, Tenosynovial
-
-[MATCHING_RULES]
-Case Sensitive: No
-Primary Topic in Title Required: Yes
-Title Weight Higher Than Abstract: Yes
+Non-Clinical: Cadaveric, Biomechanical, In Vitro
 ```
 
 ### JSON Format (`.json`)
 
 ```json
 {
-  "description": "Screening for GCT in cervical spine",
+  "description": "Screening for RCTs: CDA vs ACDF",
   "inclusion": {
-    "primary_topic": ["Giant Cell Tumor", "Osteoclastoma"],
-    "location": ["Cervical", "C1", "C2"]
+    "interventions": ["cervical disc arthroplasty", "CDA", "total disc replacement"],
+    "comparison": ["ACDF", "anterior cervical discectomy and fusion"]
   },
   "exclusion": {
-    "study_types": ["Systematic Review", "Meta-Analysis"],
-    "competing": ["Osteoblastoma", "Chordoma"]
+    "study_types": ["Systematic Review", "Meta-Analysis", "Case Report"],
+    "non_clinical": ["Cadaveric", "Biomechanical"]
   }
 }
 ```
-
-See `examples/` folder for complete examples.
 
 ---
 
@@ -158,24 +201,33 @@ See `examples/` folder for complete examples.
 
 | Key | Title | Decision | Reason |
 |-----|-------|----------|--------|
-| sanjay1993 | Giant-cell tumours of the spine... | Include | Original article on Cervical Bone GCT |
-| smith2020 | Systematic Review of Osteoblastoma... | Exclude | Not GCT/Osteoclastoma |
+| Davis2023 | Five-year outcomes of CDA versus ACDF... | Include | RCT comparing CDA vs ACDF with clinical outcomes |
+| Lee2021 | Biomechanical analysis of cervical spine... | Exclude | Non-clinical biomechanical study |
 
 ### `included_articles.ris`
 
 ```
 TY  - JOUR
-TI  - Giant-cell tumours of the spine: A clinical study
-AB  - We report 24 patients with...
-AU  - Sanjay, B.K.S.
-AU  - Sim, F.H.
-PY  - 1993
-DO  - 10.1302/0301-620X.75B1.8421032
-JO  - Journal of Bone and Joint Surgery
+TI  - Five-year outcomes of CDA versus ACDF: a randomised trial
+AB  - We report a prospective randomised controlled trial...
+AU  - Davis, R.J.
+PY  - 2023
+DO  - 10.1016/j.spinee.2023.01.005
+JO  - The Spine Journal
 ER  -
 ```
 
-Compatible with EndNote, Zotero, Mendeley, and other reference managers.
+Compatible with EndNote, Zotero, Mendeley, Rayyan, and Covidence.
+
+### `disagreements_for_review.ris`
+
+Same RIS format — contains only articles where the two AI reviewers disagreed. Import into your reference manager for manual screening.
+
+### `screening_disagreements.csv`
+
+| Key | Title | Pass_1_Decision | Pass_1_Reason | Pass_2_Decision | Pass_2_Reason |
+|-----|-------|----------------|---------------|----------------|---------------|
+| Kim2019 | Cervical arthroplasty outcomes... | Include | CDA outcome study | Exclude | No direct ACDF comparison |
 
 ---
 
@@ -187,18 +239,55 @@ Compatible with EndNote, Zotero, Mendeley, and other reference managers.
 python screen.py --help
 
 Options:
-  --criteria FILE     Path to criteria file (.txt, .docx, .json)    [required]
-  --articles FILE     Path to articles file (.bib, .ris, .json)     [required]
-  --browser CHANNEL   Browser for code generation (chrome, msedge)  [default: chrome]
-  --api-key KEY       Gemini API key (optional, faster than browser)
-  --model NAME        Gemini model (default: gemini-2.5-flash)
-  --output-dir DIR    Output directory (default: current directory)
-  --skip-codegen      Skip AI code generation, use default logic
+  --criteria FILE       Path to criteria file (.txt, .docx, .json)    [auto-detected]
+  --articles FILE(s)    Path(s) to article files (.bib, .ris, .txt)   [auto-detected]
+  --browser CHANNEL     Browser for code generation (chrome, msedge)  [default: chrome]
+  --api-key KEY         Gemini API key (optional, faster than browser)
+  --model NAME          Gemini model (default: gemini-2.5-flash)
+  --output-dir DIR      Output directory (default: current directory)
+  --skip-codegen        Skip AI code generation, reuse existing screening logic
 ```
+
+### Auto-Detection
+
+When run without arguments, the agent automatically:
+
+1. **Criteria**: Finds any file matching `*criteria*` (`.txt`, `.docx`, `.json`)
+2. **Articles**: Scans for `.bib`, `.ris`, `.txt`, `.nbib` files and validates their content headers
+3. **Priority**: Prefers files with `_deduplicated` in the name (output from the Deduplication Agent)
+4. **Safety**: Skips output files (`screening_results.csv`, `included_articles.ris`, etc.)
+
+### Modes
+
+| Mode | Command | Speed | Cost |
+|------|---------|-------|------|
+| **Browser** (default) | `python screen.py` | ~3 min | Free |
+| **API** (optional) | `python screen.py --api-key KEY` | ~60 sec | Free tier |
+
+### Reproducibility Workflow
+
+For systematic review publication, follow this workflow:
+
+```bash
+# Step 1: Generate screening logic + screen (first run)
+python screen.py
+
+# Step 2: Review generated algorithms
+#   → screen_articles_pass1.py (Reviewer 1 logic)
+#   → screen_articles_pass2.py (Reviewer 2 logic)
+
+# Step 3: For subsequent runs with the SAME locked logic:
+python screen.py --skip-codegen
+
+# Step 4: Resolve disagreements manually
+#   → Import disagreements_for_review.ris into EndNote/Rayyan
+```
+
+> **Note:** Each code generation produces a unique screening algorithm. Using `--skip-codegen` ensures identical results across runs by reusing the previously generated algorithms.
 
 ### Using Individual Scripts
 
-If you prefer step-by-step control:
+For step-by-step control:
 
 ```bash
 # Step 1: Generate screening code
@@ -211,30 +300,36 @@ python parse_bib.py
 python screen_articles.py
 ```
 
-### Modes
-
-| Mode | Command | Speed | Cost |
-|------|---------|-------|------|
-| **Browser** (default) | `python screen.py --criteria c.txt --articles a.bib` | ~2 min | Free |
-| **API** (optional) | `python screen.py --criteria c.txt --articles a.bib --api-key KEY` | ~40 sec | Free tier |
-
 ---
 
 ## Project Structure
 
 ```
 screening_agent/
-├── screen.py                    # One-command pipeline orchestrator
-├── generate_screening_code.py   # AI code generator (API + browser)
-├── screen_articles.py           # Core screening engine + RIS export
-├── criteria_parser.py           # Criteria file parser
-├── parse_bib.py                 # BibTeX parser
-├── config.py                    # Configuration
-├── requirements.txt             # Dependencies
-├── LICENSE                      # MIT License
+├── screen.py                      # One-command pipeline orchestrator
+├── generate_screening_code.py     # AI code generator (API + browser)
+├── screen_articles.py             # Core screening engine + RIS export
+├── criteria_parser.py             # Criteria file parser (structured + free-text)
+├── parse_bib.py                   # BibTeX parser (PubMed, Scopus, WoS)
+├── config.py                      # Configuration
+├── requirements.txt               # Dependencies
+├── LICENSE                        # MIT License
 └── examples/
     ├── example_criteria.txt
     └── example_criteria.json
+```
+
+### Generated at Runtime
+
+```
+├── screen_articles_pass1.py       # AI Reviewer 1 screening logic (auditable)
+├── screen_articles_pass2.py       # AI Reviewer 2 screening logic (auditable)
+├── parsed_articles.json           # Parsed articles in JSON format
+├── screening_results.csv          # Agreed decisions
+├── screening_disagreements.csv    # Disagreement details
+├── included_articles.ris          # Agreed included articles (RIS)
+├── disagreements_for_review.ris   # Disagreements for manual screening (RIS)
+└── screening_pipeline.log         # Full execution log
 ```
 
 ---
@@ -243,9 +338,19 @@ screening_agent/
 
 | Parameter | Value | Purpose |
 |-----------|-------|---------|
-| `temperature` | `0.2` | Deterministic, reproducible output |
+| `temperature` | `0.2` | Low variance, focused output |
 | `max_output_tokens` | `16384` | Room for generated screening code |
 | Model | `gemini-2.5-flash` | Fast, capable |
+
+---
+
+## Methodology
+
+This agent implements the dual-pass screening strategy described in the manuscript:
+
+> *"The screening agent applied inclusion and exclusion criteria to titles and abstracts. A dual-pass strategy was employed to ensure consistency in the AI decisions for screening, where each screening task was executed twice independently. Only when both outputs matched was the decision finalised."*
+
+The implementation generates **two independent screening algorithms** via separate LLM calls, analogous to two human reviewers independently interpreting the same inclusion/exclusion criteria. This produces a meaningful agreement rate and identifies articles requiring human adjudication.
 
 ---
 
@@ -266,5 +371,5 @@ MIT License — see [LICENSE](LICENSE) for details.
 ---
 
 <p align="center">
-  <sub>Built for systematic reviewers. One command to screen them all.</sub>
+  <sub>Built for systematic reviewers. Dual AI reviewers. Human oversight for disagreements.</sub>
 </p>
