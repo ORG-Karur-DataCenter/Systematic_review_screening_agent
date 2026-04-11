@@ -284,7 +284,9 @@ def auto_detect_articles(search_dir="."):
             with open(f, 'r', encoding='utf-8', errors='replace') as fh:
                 head = fh.read(1000)
             # Must look like PubMed, RIS, or BibTeX
-            if any(marker in head for marker in ['PMID-', 'TI  -', 'TY  -', '@article', '@Article', '@inproceedings']):
+            head_lower = head.lower()
+            if any(marker in head for marker in ['PMID-', 'TI  -', 'TY  -']) or \
+               any(marker in head_lower for marker in ['@article', '@inproceedings', '@book', '@misc', '@incollection']):
                 candidates.append(str(f))
         except Exception:
             continue
