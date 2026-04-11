@@ -1,6 +1,19 @@
+"""
+screen_articles.py — Dual-Pass Screening Engine with RIS Export
+
+Screens parsed articles using keyword logic, runs dual independent passes,
+and exports included articles as a valid RIS file.
+
+Usage:
+    python screen_articles.py                          # Uses parsed_articles.json
+    python screen_articles.py --input my_articles.json
+"""
+
 import json
 import csv
+import os
 import logging
+import argparse
 
 # Structured logging
 logging.basicConfig(
@@ -127,13 +140,114 @@ def dual_pass_screening(json_path):
     if disagreements:
         logger.warning(f"  Disagreements: {len(disagreements)} articles flagged for human review")
     else:
-        logger.info(f"  No disagreements — 100% consistency confirmed.")
+        logger.info(f"  No disagreements -- 100% consistency confirmed.")
 
     return agreed, disagreements, articles
 
 
+def export_included_ris(agreed_results, all_articles, output_path="included_articles.ris"):
+    """
+    Export all INCLUDED articles as a valid RIS file.
+    
+    RIS format spec:
+      TY  - type (JOUR, BOOK, etc.)
+      TI  - title
+      AB  - abstract
+      AU  - author (one per line)
+      PY  - publication year
+      DO  - DOI
+      JO  - journal name
+      KW  - keywords
+      ER  - end of record
+    
+    Always writes the file, even if 0 articles are included (empty file).
+    """
+    included_keys = {r['Key'] for r in agreed_results if r['Decision'] == 'Include'}
+
+    # Build a lookup by key for all original articles
+    articles_by_key = {}
+    for art in all_articles:
+        articles_by_key[art['key']] = art
+
+    count = 0
+    with open(output_path, 'w', encoding='utf-8') as ris:
+        for key in sorted(included_keys):
+            art = articles_by_key.get(key)
+            if not art:
+                logger.warning(f"  Key '{key}' not found in original articles — skipping.")
+                continue
+
+            # Record type
+            ris.write("TY  - JOUR\n")
+
+            # Title (required)
+            title = art.get('title', '').strip()
+            if title:
+                ris.write(f"TI  - {title}\n")
+
+            # Abstract
+            abstract = art.get('abstract', '').strip()
+            if abstract:
+                ris.write(f"AB  - {abstract}\n")
+
+            # Authors — one AU line per author
+            authors_raw = art.get('author', '').strip()
+            if authors_raw:
+                # Handle both "and"-separated and ";"-separated formats
+                authors_raw = authors_raw.replace(';', ' and ')
+                for author in authors_raw.split(' and '):
+                    author = author.strip()
+                    if author:
+                        ris.write(f"AU  - {author}\n")
+
+            # Year
+            year = str(art.get('year', '')).strip()
+            if year:
+                ris.write(f"PY  - {year}\n")
+
+            # DOI
+            doi = art.get('doi', '').strip()
+            if doi:
+                ris.write(f"DO  - {doi}\n")
+
+            # Journal
+            journal = art.get('journal', '').strip()
+            if journal:
+                ris.write(f"JO  - {journal}\n")
+
+            # Keywords
+            keywords = art.get('keywords', '').strip()
+            if keywords:
+                for kw in keywords.split(','):
+                    kw = kw.strip()
+                    if kw:
+                        ris.write(f"KW  - {kw}\n")
+
+            # End of record
+            ris.write("ER  - \n\n")
+            count += 1
+
+    logger.info(f"Included articles exported to {output_path} ({count} articles)")
+    return count
+
+
 if __name__ == "__main__":
-    agreed, disagreements, all_articles = dual_pass_screening('parsed_articles.json')
+    parser = argparse.ArgumentParser(
+        description="Dual-pass article screening with RIS export",
+    )
+    parser.add_argument(
+        "--input",
+        help="Path to parsed articles JSON (default: parsed_articles.json)",
+        default="parsed_articles.json"
+    )
+    args = parser.parse_args()
+
+    if not os.path.exists(args.input):
+        logger.error(f"Input file not found: {args.input}")
+        logger.info("Run parse_bib.py first to generate parsed_articles.json")
+        exit(1)
+
+    agreed, disagreements, all_articles = dual_pass_screening(args.input)
 
     # Save agreed results
     with open('screening_results.csv', 'w', newline='', encoding='utf-8') as f:
@@ -150,28 +264,9 @@ if __name__ == "__main__":
             writer.writerows(disagreements)
         logger.info(f"Disagreements saved: screening_disagreements.csv")
 
-    # Export filtered RIS of INCLUDED articles with title + abstract
-    included_keys = {r['Key'] for r in agreed if r['Decision'] == 'Include'}
-
-    with open('included_articles.ris', 'w', encoding='utf-8') as ris:
-        for art in all_articles:
-            if art['key'] in included_keys:
-                ris.write(f"TY  - JOUR\n")
-                ris.write(f"TI  - {art.get('title', '')}\n")
-                ris.write(f"AB  - {art.get('abstract', '')}\n")
-                if art.get('author'):
-                    for author in art['author'].split(' and '):
-                        ris.write(f"AU  - {author.strip()}\n")
-                if art.get('year'):
-                    ris.write(f"PY  - {art['year']}\n")
-                if art.get('doi'):
-                    ris.write(f"DO  - {art['doi']}\n")
-                if art.get('journal'):
-                    ris.write(f"JO  - {art['journal']}\n")
-                ris.write(f"ER  - \n\n")
+    # Always export RIS — robust, sorted, complete
+    export_included_ris(agreed, all_articles, "included_articles.ris")
 
     logger.info(f"Screening complete. Results saved to screening_results.csv")
-    logger.info(f"Included articles exported to included_articles.ris ({len(included_keys)} articles)")
     for res in agreed:
         print(f"[{res['Decision']}] {res['Title'][:50]}... - {res['Reason']}")
-
