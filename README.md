@@ -27,6 +27,33 @@
 
 ---
 
+## 🌐 Web Interface — No Installation Required
+
+A fully browser-based version of this screening agent is available on GitHub Pages:
+
+**👉 [Launch Web Screening App](https://org-karur-datacenter.github.io/sr-screen-app/)**
+
+### How It Works (Web Version)
+
+1. **Upload** your `.bib`, `.ris`, `.txt`, or `.nbib` article files
+2. **Enter** your inclusion/exclusion criteria
+3. **Paste** your free [Gemini API key](https://aistudio.google.com/app/apikey)
+4. **Click Run** — the app makes **one single API call** to generate a custom screening logic engine from your criteria, then **screens all articles instantly in your browser** with zero further API usage
+
+### Key Features
+
+| Feature | Detail |
+|---------|--------|
+| **Single API call** | AI generates a Javascript screening engine once; all articles evaluated locally |
+| **No rate limits** | After the initial logic generation, screening is 100% offline and instant |
+| **No installation** | Runs entirely in your browser — no Python, no dependencies |
+| **Privacy** | API key stored only in your browser's localStorage, never sent to any server |
+| **Export** | Download results as CSV, audit logs, and RIS files for import into EndNote/Zotero |
+
+> **Source code:** [sr-screen-app repository](https://github.com/ORG-Karur-DataCenter/sr-screen-app)
+
+---
+
 ## Quickstart
 
 ### 1. Install
