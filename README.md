@@ -69,6 +69,16 @@ No browser needed.
 
 ---
 
+## 🌐 Web Interface
+
+Prefer not to install anything? A browser-based version is also available:
+
+**[Launch Web Screening App](https://org-karur-datacenter.github.io/sr-screen-app/)** · [Source code](https://github.com/ORG-Karur-DataCenter/sr-screen-app)
+
+Upload articles, enter criteria, paste your Gemini API key, and click Run. One API call generates a screening engine, then all articles are screened **instantly in your browser**.
+
+---
+
 ## How It Works
 
 ```
@@ -228,23 +238,6 @@ Same RIS format — contains only articles where the two AI reviewers disagreed.
 | Key | Title | Pass_1_Decision | Pass_1_Reason | Pass_2_Decision | Pass_2_Reason |
 |-----|-------|----------------|---------------|----------------|---------------|
 | Kim2019 | Cervical arthroplasty outcomes... | Include | CDA outcome study | Exclude | No direct ACDF comparison |
-
----
-
-## 🌐 Web Interface
-
-A browser-based version of this screening agent is also available — no installation required:
-
-**[Launch Web Screening App](https://org-karur-datacenter.github.io/sr-screen-app/)** · [Source code](https://github.com/ORG-Karur-DataCenter/sr-screen-app)
-
-Upload articles, enter criteria, paste your Gemini API key, and click Run. The app makes **one API call** to generate a custom screening engine, then screens all articles **instantly in your browser** with no further API usage.
-
-| Feature | Detail |
-|---------|--------|
-| **Single API call** | AI generates a Javascript screening engine once; all articles evaluated locally |
-| **No rate limits** | After logic generation, screening is 100% offline and instant |
-| **No installation** | Runs entirely in your browser — no Python, no dependencies |
-| **Export** | CSV results, audit logs, and RIS files for EndNote/Zotero |
 
 ---
 
